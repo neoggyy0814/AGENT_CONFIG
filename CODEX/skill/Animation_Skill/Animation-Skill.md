@@ -1,0 +1,228 @@
+# 2D Character/Object Animation Asset Skill
+
+## Purpose
+
+This skill is a generator, not a per-action instruction set: whenever a requirement involves a 2D character or object producing continuous visual motion — walking, running, idle, attacking, casting, taking damage, dying, jumping, interacting, or any other multi-frame action — that requirement must go through the full animation asset pipeline below. New actions do not need a new rule; they all enter the same pipeline.
+
+Target pipeline:
+
+Animation requirement → Animation specification → Source image generation → Frame extraction → Frame alignment → Animation resource setup → Runtime integration → Visual verification
+
+A single static image that is moved, translated, rotated, scaled, or horizontally flipped is never a substitute for a required frame-based animation.
+
+## Why This Skill Exists
+
+These are root-cause failure patterns, not background story — check for them explicitly, every time:
+
+- **A movement requirement often silently bundles an animation requirement.** "The character can move," "flips based on direction," "can change target mid-route," "stops on arrival" are behavioral/logic requirements. "Has a walking animation" is a separate visual requirement stated in the same sentence. Treat them as two requirements even when the user writes them as one paragraph — do not let implementing the easier one (movement) stand in for the harder one (animation).
+- **Completing movement does not complete animation.** Position change, horizontal flip, scale, or rotation applied to one static image is a fully working movement implementation and a fully unmet animation requirement at the same time. These are not degrees of the same thing — verify them separately.
+- **An AI-generated image is source material, not a runtime-ready asset**, even when it was explicitly generated in response to "make a walking animation." Without this pipeline, the default failure mode is: generate one image → attach it to AnimatedSprite2D → loop the same single frame, or animate it via transform. That result must never be reported as "animation complete."
+- **`flip_h` (or any horizontal mirroring) only mirrors an existing viewpoint — it cannot substitute for a missing one.** A front-facing walk cycle flipped left/right is still front-facing; it does not become a side or back view. If the requirement needs the character to visibly turn (e.g., face away from or toward the camera, not just left/right), mirroring alone cannot satisfy it — see Section 9.
+- **Self-inspection of generated artwork defaults to a rubber stamp, not a genuine check.** The most common failure is not "regeneration kept failing and no one noticed" — it is declaring a result acceptable without a real, per-criterion check against what "correct" actually means for that action. Treat an inspection pass as untrustworthy unless it produced explicit, criterion-by-criterion judgments with visual evidence — see Section 5.
+- **Text description cannot reliably encode structural motion correctness** (limb alternation, timing, spatial relationships between moving parts) for any action, not only locomotion. When a genuine inspection finds repeated regeneration is not converging on this, the fix is not more detailed prose, and it is not indefinite regeneration — see Section 5's reference-image escalation.
+
+## Relationship to Other Project Rules
+
+- This skill is a project-level supplement to the Codex global rules and `agent-workflow.md`. It does not redefine static-check behavior, approval thresholds, or fix/abort logic.
+- When frame generation or extraction repeatedly fails to produce usable results, stop per `agent-workflow.md`'s **Fix-Progress Judgment and Abort Criteria** — do not keep regenerating artwork indefinitely, and do not define a separate stopping rule here.
+- This skill applies within `agent-workflow.md`'s "4. Check Current State" and "5. Implement" steps whenever the requirement involves a character or object needing continuous visual motion.
+- This document defines content rules only. Whether it is actually loadable by a given Codex/Agent environment depends on that environment's own Skill file format/validation requirements, which are a separate concern — validate against the environment's own tooling when integrating.
+
+---
+
+## 1. Detect the Animation Requirement
+
+Before implementing character movement or interaction, inspect the requirement — including requirements phrased primarily around movement or logic — for any indication of continuous visual motion.
+
+Treat it as an animation requirement if the description implies visual change over time. Trigger phrasing is not limited to movement — it includes any action-specific animation reference, for example: "walk/walking animation," "run," "attack animation," "casting/spell animation," "hit reaction," "death animation," "idle animation," "emote," "expression change," "animate while moving," "different frames during [any action]." This list is illustrative, not exhaustive — apply the same test (does the description imply visual change over time) to any action, not only locomotion.
+
+Movement-adjacent behavioral requirements — direction change, mid-route retargeting, stop-on-arrival — do not by themselves create an animation requirement; they describe movement logic, not visual change. They only need to be reflected in animation state once an animation requirement already exists for other reasons (see Section 10).
+
+Do not interpret such requirements as satisfied by:
+
+- moving a static sprite
+- changing sprite position
+- flipping the sprite horizontally
+- applying a transform (scale/rotation)
+- changing a single image property
+
+If continuous motion is required, create or obtain multiple animation frames — this is non-negotiable regardless of how the rest of the requirement (movement logic, targeting, state transitions) is implemented.
+
+## 2. Define the Animation Before Creating Assets
+
+Before generating or processing animation artwork, determine the minimum animation specification the current task actually needs. At minimum, define:
+
+- Action name
+- Number of frames
+- Frame order
+- Playback speed
+- Loop or non-loop behavior
+- Frame dimensions
+- Character anchor / alignment point
+- Required viewpoints, and which ones are mirror-equivalent via horizontal flip (see Section 9) — do not assume a default; determine this from the requirement
+- Integration pattern: continuous/state-driven, or triggered/one-shot (see Section 10) — and, if triggered, whether it can be interrupted and what state it returns to on completion
+- Correctness criteria specific to this action — what visibly distinguishes a correct result from an incorrect one for this particular motion (e.g., for a locomotion cycle: limb alternation; for a strike: anticipation/impact/follow-through; for a cast: buildup/release). Define this per action — no universal template covers every action type, and a criterion borrowed from a different action should not be assumed to apply.
+
+Do not invent unnecessary animation requirements. A simple walking animation needs only a small number of visually distinct frames, unless the user explicitly requests more detail.
+
+## 3. Generate Animation Source Artwork
+
+Generate a sequence of visually continuous poses, not a single static character image. Prefer a single sprite-sheet source image containing multiple frames when practical.
+
+Each frame should:
+
+- depict the same character, preserving the same design, visual style, scale, viewpoint, proportions, lighting, and palette
+- show meaningful progression against this action's correctness criteria as defined in Section 2 — not just visual variety between frames
+- occupy a consistent frame area and ground/anchor position
+
+Do not assume a single universal pose template applies to every action type. Locomotion, a strike, a spell cast, and an emote each have their own correctness criteria (defined in Section 2) and their own key-pose structure — do not carry one action's pose breakdown over to another action by default.
+
+If a reference image for this action's motion is already available — whether provided by the user or already generated and verified for another compliant viewpoint or action of the same character — use it directly as generation input rather than defaulting to text-only prompting first. When a reference image is used as generation input, extract only motion/pose features from it — limb alternation, contact/passing timing, secondary-element motion, and similar structural characteristics relevant to this action's correctness criteria (Section 2). Do not carry over the reference's character design, clothing, art style, color palette, or any watermark/background artifact. The project's own established character design takes precedence; the reference governs motion only.
+
+Specify each frame's pose individually before generating — leg/limb position, torso height, secondary-element motion (cape, hair, loose clothing) as relevant to this action's correctness criteria — rather than issuing one generic instruction for the whole sheet (e.g., "generate a walking animation") and hoping the generation method infers correct structure on its own. If the generation method or tool cannot accept per-frame pose instructions, generate and check one frame at a time instead of an entire sheet at once.
+
+> **Example (illustrative only — do not apply verbatim to other actions).** A locomotion cycle's correctness criteria typically include: the leading limb alternates across the cycle (a walk cycle needs at least one contact pose with each side leading); some vertical bob between contact and passing poses; arm counter-swing; and secondary elements (cape/cloak/hair) reacting to the stride. A classic 4-pose breakdown: (1) Contact-A — front leg planted, back leg trailing, body lowest; (2) Passing-1 — legs crossing under the body, body highest; (3) Contact-B — mirrors pose 1 with legs swapped; (4) Passing-2 — mirrors pose 2. Other actions need their own breakdown from their own correctness criteria — e.g., a strike might use anticipation/impact/follow-through rather than limb alternation.
+
+Treat the source artwork as animation material, not a final runtime asset.
+
+## 4. Prefer Structured Sprite-Sheet Layouts
+
+When generating multiple frames, prefer a predictable grid or explicitly structured layout — one row per animation, one cell per frame, identical cell dimensions.
+
+Avoid irregular arrangements if the image will later need automatic extraction. If the generation method cannot reliably produce a clean, regular sprite sheet, do not silently assume the result is animation-ready — inspect it before importing into the game.
+
+## 5. Inspect the Generated Artwork
+
+Self-inspection by the same process that just generated the artwork is unreliable by default. It tends to fail in one of two ways: not genuinely checking (moving straight from "N frames exist" to "proceeding"), or superficially confirming (treating "the frames look different from each other" as evidence of correctness without checking against the actual criteria). Both are self-report failures — performing an inspection step is not the same as the inspection being reliable — and must be treated with the same skepticism as any other unverified completion claim (see Section 11 / `agent-workflow.md`'s self-report rule).
+
+For inspection to be genuine rather than a rubber stamp:
+
+- Evaluate the artwork against each correctness criterion defined in Section 2 individually, and produce an explicit judgment for each one — met or not met, with the specific visual evidence behind that judgment — rather than one overall impression.
+- If visual/multimodal review is available, use it to actually look at the artwork against each criterion; generation metadata (e.g., "4 frames were produced") is not evidence that the motion itself is correct.
+- Also check the more basic, non-motion properties: visible frame count, frame boundaries, image dimensions, transparency/background, character consistency, character scale (including consistency across viewpoints when multiple viewpoints exist), feet/ground position, body position, facing direction, accidental cropping, duplicated or missing frames, and unwanted artifacts.
+
+If the artwork does not provide usable animation frames, do not compensate by treating a static image as an animation. Regenerate or revise the source artwork when appropriate.
+
+If a genuine inspection — not a rubber-stamp one — finds that repeated regeneration is not converging toward the defined correctness criteria, apply `agent-workflow.md`'s Fix-Progress Judgment: is each attempt getting closer, or is the same structural gap recurring regardless of prompt refinement? When the recurring gap is a structural motion property — limb alternation, timing, spatial relationships between moving parts — that text prompting has repeatedly failed to fix, this matches `agent-workflow.md`'s abort criterion that resolving the problem requires a user decision: stop iterating on text-only prompts and ask the user for a reference or demonstration image of the desired motion, rather than continuing to regenerate indefinitely. If a usable reference is already available at that point, use it immediately instead of requesting a new one or continuing further text-only attempts.
+
+## 6. Extract Individual Frames
+
+Do not use the complete generated sprite sheet directly as a character texture unless the runtime system is explicitly configured to interpret it as a sprite sheet.
+
+Extract or configure individual frame regions per the actual source layout. Each frame must have identical width, identical height, a consistent coordinate system, and correct order. Prefer deterministic extraction from known frame dimensions or grid coordinates; do not manually crop each frame with arbitrary dimensions when a common frame structure exists.
+
+## 7. Align Animation Frames
+
+Frame alignment is required, not optional polish. Before finalizing, confirm the character does not appear to jump, drift, or change scale between frames due to inconsistent cropping.
+
+Use a consistent anchor appropriate to the asset type — for example: the character's feet/ground-contact point for locomotion (walk, run, idle); a weapon, hitbox, or effect origin for combat or spell-casting actions; or a fixed offset relative to the character or screen for overlay-style assets such as emotes, expression bubbles, or face-only swaps that are not full-body sprites. Whichever anchor applies, keep it stable across frames — character scale, the chosen anchor position, frame dimensions, and camera position should not drift — unless the animation itself intentionally changes them. The internal pose may change; the frame's coordinate system relative to its anchor must not.
+
+If different poses have different amounts of surrounding transparent space, correct it through consistent frame alignment rather than letting the sprite visually shift during playback.
+
+## 8. Create the Runtime Animation
+
+After extraction and alignment, create the actual animation resource. For Godot, use the project's existing animation system where possible (AnimatedSprite2D, SpriteFrames, AnimationPlayer). Do not introduce a new animation framework unless the current project actually requires it.
+
+Configure: animation name, frame sequence, frame duration/FPS, loop behavior, default animation, playback state. The runtime animation should reference the processed frames, not the raw generation source.
+
+## 9. Handle Orientation and Direction
+
+Two different things are often conflated here — keep them separate:
+
+- **Viewpoint**: which side of the character the artwork actually depicts (e.g., front/down-facing, back/up-facing, side view). A different viewpoint requires different source artwork; it cannot be derived from another viewpoint by flipping, scaling, or any other transform.
+- **Mirroring**: reusing one viewpoint's artwork for its horizontal mirror image (e.g., a side view facing right, flipped to face left). `flip_h` performs mirroring only — it cannot substitute for a missing viewpoint. A front-facing frame set flipped horizontally is still front-facing, never a side or back view.
+
+Before generating direction-related artwork, determine from the requirement how many distinct viewpoints are actually needed — do not assume a default. Examples:
+
+- single view only (e.g., a fixed-angle icon, or a character that never visibly turns): 1 viewpoint, no mirroring needed
+- classic 3-viewpoint set (front/down, back/up, side): the side view covers both left and right via mirroring; front and back are not mirror-equivalent to anything and must each be generated
+- 4- or 8-directional movement (e.g., top-down or isometric games): generate each viewpoint the direction scheme actually requires; mirror only the pairs that are true horizontal mirrors of each other (e.g., "down-left" and "down-right" typically mirror; "up"/"down" do not mirror to anything)
+
+If it is unclear how many viewpoints the requirement needs — e.g., the requirement only says "flips based on direction" without specifying whether the character must visibly turn to face away from or toward the camera — treat this as a missing requirement per Section 1 / `agent-workflow.md`'s ambiguity rule, and ask, rather than defaulting to either a single-viewpoint-plus-flip solution or a full multi-viewpoint set.
+
+Once the required viewpoints are determined, within each viewpoint prefer horizontal flipping over generating duplicate artwork for its mirror direction. Only generate separate mirrored artwork if the visual design is not horizontally symmetrical or the user explicitly requires it. Orientation/direction handling must not break frame alignment or playback.
+
+When a character or object has multiple required viewpoints, rendered scale and anchor position must be consistent across viewpoints, not only within each viewpoint's own frame set. A character that changes visible height or anchor offset when switching from one viewpoint's animation to another's is a failure, even if each viewpoint independently passes its own internal alignment check (Section 7). Verify this as an explicit, separate check — internal consistency within one viewpoint does not imply consistency across viewpoints.
+
+## 10. Integrate Animation With Character State
+
+Animation must correspond to actual character state. Two distinct patterns exist — determine which one an action belongs to during Section 2's specification step, since they require different integration logic.
+
+**Continuous, state-driven animations** (idle, walk, run — animations that track an ongoing condition):
+
+- state begins → start the corresponding animation
+- state continues → continue the animation
+- state ends → stop the animation or return to idle
+- a relevant sub-condition changes (e.g., facing direction, movement target) → update accordingly without breaking the animation
+- state fully resolves → return to the appropriate non-active state
+
+**Triggered, one-shot animations** (attack, cast, hit reaction, death, emote/expression change — animations fired by a discrete event rather than an ongoing condition):
+
+- an event triggers the animation → play it once (or per the loop spec defined in Section 2), not continuously
+- define whether the animation can be interrupted (e.g., by movement, another action, or being hit) and what happens to it if interrupted
+- on completion, define what happens next based on whether the action is **terminal** or **non-terminal** for the character:
+  - non-terminal (attack, cast, hit reaction, emote/expression change) → explicitly return to the correct prior/default state (e.g., attack animation finishes → return to idle, not left on its last frame)
+  - terminal (death, or any action that ends the entity's active state) → do not return to a prior/default state; instead hold on the final frame, remove/despawn, or transition to whatever end-of-life behavior the requirement specifies
+  - either way, this must be verified, not assumed
+- if two triggered animations (or a triggered animation and a continuous one) could overlap, define which one takes priority so animation state never has two conflicting sources of truth
+
+In both patterns, movement/logic code and animation state must not become independent, potentially contradictory sources of truth — animation state should reflect actual gameplay state.
+
+## 11. Verify the Animation Visually
+
+Automated checks alone are insufficient for visual animation quality.
+
+Automated validation can confirm: required resources exist, expected frame count exists, frame dimensions are valid, resources load, animation names are correct, scenes load, scripts reference valid resources, and the project runs without relevant errors.
+
+Manual visual verification is required for: frame-to-frame continuity, correct alignment, foot sliding, character jitter, unexpected scale changes, incorrect direction flipping, incorrect frame order, correct start/stop timing, and visual quality of the generated artwork.
+
+Consistent with `agent-workflow.md`'s reporting rule that self-reported completion is not trustworthy without reproducible evidence: do not claim visual verification is complete if the execution environment cannot actually display and inspect the animation.
+
+## 12. Completion Criteria
+
+An animation task is complete only when all applicable stages are done:
+
+1. The required action has been identified.
+2. The animation specification is defined.
+3. Multiple action frames exist when continuous animation is required.
+4. Source artwork has been genuinely inspected against Section 2's correctness criteria — a per-criterion judgment, not a rubber-stamp pass.
+5. Frames have been extracted or correctly configured.
+6. Frames are consistently aligned.
+7. The runtime animation has been created.
+8. Required viewpoints have been generated and mirroring/direction handling implemented as specified, when applicable.
+9. Animation state is connected to the relevant gameplay state.
+10. Automated validation has been performed where possible.
+11. Visual behavior has been manually verified when required.
+
+A generated character image alone does not satisfy these criteria.
+
+## 13. Avoid Common Shortcuts
+
+None of the following count as completing a required animation:
+
+- moving a static image across the screen
+- flipping a static image
+- repeatedly displaying the same frame
+- changing scale or rotation to simulate motion
+- generating one character image and assuming animation can be added later
+- using an unverified AI-generated sprite sheet directly
+- allowing each frame to have unrelated scale or positioning
+- declaring animation complete because the project launches successfully
+
+When continuous action is required, produce the complete asset and runtime pipeline — not a proxy for it.
+
+## 14. Scope and Stopping Conditions
+
+Only create the animation assets the current task actually requires. Do not generate unused character actions, unnecessary directions, unused animation states, large animation libraries, or future character variations pre-emptively.
+
+When a genuine inspection (Section 5) identifies a structural gap in one specific viewpoint, action, or frame set, correction is scoped to that gap. Do not regenerate or re-verify viewpoints, actions, or frame sets that already passed genuine inspection, unless the fix could plausibly affect them (e.g., a shared base design change).
+
+If generated artwork repeatedly fails to provide usable frames, stop per `agent-workflow.md`'s Fix-Progress Judgment and Abort Criteria. Prefer a clear, minimal, working animation over an increasingly complex asset-generation pipeline.
+
+---
+
+## Expected Workflow
+
+For a typical 2D character walking animation:
+
+Requirement → Define walk cycle → Generate multi-frame source artwork → Inspect source image → Extract frames → Align frames → Create SpriteFrames/animation → Connect animation to movement state → Configure horizontal facing flip → Run automated checks → Manually inspect the animation → Report completion and verification status
